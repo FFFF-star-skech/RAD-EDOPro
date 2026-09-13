@@ -1,0 +1,146 @@
+name: RAD EDOPro v0.5.1 Windows build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rad-windows-build.yml'
+      - 'payload/**'
+  workflow_dispatch:
+
+env:
+  EDOPRO_COMMIT: 589ad27d2cc69efc4bf51d7e61c426ae4b1ae3f5
+  CORE_COMMIT: 122e0d091a0f399221a4510cc98a406ae485905f
+  LUA_COMMIT: 6e22fedb74cf0c9b6656e9fce8b7331db847c605
+  OVERLAY_SHA256: b5b1db164a12bbd17dc4f90ac437c4566eeed0701294dda2d3b6301726a0924a
+  DEPENDENCIES_BASE_URL: https://github.com/edo9300/edopro-vcpkg-cache/releases/latest/download
+  TRAVIS_OS_NAME: linux
+  TARGET_OS: windows
+  DXSDK_DIR: /tmp/d3d9sdk/
+  VCPKG_ROOT: /tmp/vcpkg2
+  BUILD_CONFIG: release
+  ARCH: win32
+  MINGW_LITE_VARIANT: -msvcrt
+  VCPKG_TRIPLET: -mingw-static
+  CC: /usr/local/bin/i686-w64-mingw32-gcc
+  CXX: /usr/local/bin/i686-w64-mingw32-g++
+  AR: /usr/local/bin/i686-w64-mingw32-gcc-ar
+
+concurrency:
+  group: rad-edopro-windows-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout RAD build repository
+        uses: actions/checkout@v4
+
+      - name: Reconstruct and verify RAD overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rad
+          cat payload/overlay.b64.part* | tr -d '\n\r' | base64 --decode > /tmp/rad_overlay.tar.gz
+          echo "$OVERLAY_SHA256  /tmp/rad_overlay.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/rad_overlay.tar.gz -C /tmp/rad
+          test -f /tmp/rad/payload/edopro_overlay/gframe/rad_client.cpp
+          test -f /tmp/rad/payload/runtime_overlay/expansions/RAD-actions.cdb
+          test "$(find /tmp/rad/payload/runtime_overlay/pics -maxdepth 1 -type f -name '*.jpg' | wc -l)" -eq 4
+
+      - name: Checkout pinned upstream EDOPro and core
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/edo9300/edopro.git edopro
+          git -C edopro checkout "$EDOPRO_COMMIT"
+          git -C edopro submodule update --init --recursive
+          git -C edopro/ocgcore fetch origin "$CORE_COMMIT"
+          git -C edopro/ocgcore checkout "$CORE_COMMIT"
+          git -C edopro/ocgcore submodule update --init --recursive
+          if [ -d edopro/ocgcore/lua/src/.git ] || git -C edopro/ocgcore/lua/src rev-parse --git-dir >/dev/null 2>&1; then
+            git -C edopro/ocgcore/lua/src fetch origin "$LUA_COMMIT"
+            git -C edopro/ocgcore/lua/src checkout "$LUA_COMMIT"
+          fi
+
+      - name: Apply RAD v0.5.1 source overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -a /tmp/rad/payload/edopro_overlay/. edopro/
+          grep -q 'RAD' edopro/gframe/rad_client.cpp
+          grep -q 'OCG_DuelSetActionCard' edopro/ocgcore/ocgapi.h
+
+      - name: Configure dependency cache
+        shell: bash
+        run: |
+          echo "VCPKG_CACHE_ZIP_URL=$DEPENDENCIES_BASE_URL/installed_x86-windows-mingw-static.zip" >> "$GITHUB_ENV"
+
+      - name: Install runner prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full zip xz-utils zstd
+
+      - name: Install MinGW-lite toolchain
+        working-directory: edopro
+        shell: bash
+        run: ./travis/install_mingw_lite.sh
+
+      - name: Install premake
+        working-directory: edopro
+        shell: bash
+        run: ./travis/install-premake5.sh
+
+      - name: Install EDOPro dependencies
+        working-directory: edopro
+        shell: bash
+        run: ./travis/dependencies.sh
+
+      - name: Do not bundle a font file
+        working-directory: edopro
+        shell: bash
+        run: rm -f NotoSansJP-Regular.otf
+
+      - name: Build RAD EDOPro client and matching ocgcore DLL
+        working-directory: edopro
+        shell: bash
+        run: ./travis/build.sh
+
+      - name: Assemble Windows binary package
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$GITHUB_WORKSPACE/artifact/RAD_EDOPro_v0.5.1_Windows"
+          mkdir -p "$OUT"
+          EXE="$(find edopro/bin -type f -name 'ygoprodll.exe' -print -quit)"
+          CORE="$(find edopro/bin -type f -name 'ocgcore.dll' -print -quit)"
+          test -n "$EXE" && test -f "$EXE"
+          test -n "$CORE" && test -f "$CORE"
+          cp "$EXE" "$OUT/EDOPro.exe"
+          cp "$CORE" "$OUT/ocgcore.dll"
+          cp -a /tmp/rad/payload/runtime_overlay/. "$OUT/"
+          cp -a /tmp/rad/payload/docs/. "$OUT/"
+          printf '%s\n' \
+            'RAD EDOPro v0.5.1 Windows binaries' \
+            "EDOPro upstream: $EDOPRO_COMMIT" \
+            "ygopro-core upstream: $CORE_COMMIT" \
+            'Built by GitHub Actions from the RAD3 source overlay.' \
+            > "$OUT/WINDOWS_BINARY_STATUS.txt"
+          find "$OUT" -type f \( -iname '*.otf' -o -iname '*.ttf' \) -delete
+          test -f "$OUT/pics/150000001.jpg"
+          test -f "$OUT/pics/150000024.jpg"
+          test -f "$OUT/pics/150000033.jpg"
+          test -f "$OUT/pics/150000042.jpg"
+          test "$(find "$OUT/pics" -maxdepth 1 -type f -name '*.jpg' | wc -l)" -eq 4
+          (cd "$OUT" && sha256sum EDOPro.exe ocgcore.dll expansions/RAD-actions.cdb > WINDOWS_SHA256.txt)
+
+      - name: Upload RAD Windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: RAD_EDOPro_v0.5.1_Windows
+          path: artifact/RAD_EDOPro_v0.5.1_Windows
+          if-no-files-found: error
+          retention-days: 30
