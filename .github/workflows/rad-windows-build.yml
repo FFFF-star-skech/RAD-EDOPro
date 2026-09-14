@@ -121,6 +121,15 @@ jobs:
           fi
           exit "$status"
 
+      - name: Upload RAD build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rad-build-log
+          path: rad-build.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Assemble Windows binary package
         shell: bash
         run: |
