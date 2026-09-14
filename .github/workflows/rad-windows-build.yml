@@ -109,7 +109,17 @@ jobs:
       - name: Build matching RAD client and core
         working-directory: edopro
         shell: bash
-        run: ./travis/build.sh
+        run: |
+          set +e
+          ./travis/build.sh > "$GITHUB_WORKSPACE/rad-build.log" 2>&1
+          status=$?
+          echo '===== RAD BUILD LOG TAIL ====='
+          tail -n 180 "$GITHUB_WORKSPACE/rad-build.log"
+          if [ "$status" -ne 0 ]; then
+            echo '===== RAD BUILD ERROR LINES ====='
+            grep -nEi 'error:|fatal error|undefined reference|cannot find|no such file|no rule to make|recipe for target|collect2:' "$GITHUB_WORKSPACE/rad-build.log" | tail -n 120 || true
+          fi
+          exit "$status"
 
       - name: Assemble Windows binary package
         shell: bash
