@@ -1,4 +1,4 @@
-name: RAD EDOPro v0.5.2 replay pace Windows build
+name: RAD EDOPro v0.6 replay timeline Windows build
 
 on:
   push:
@@ -7,6 +7,9 @@ on:
       - '.github/workflows/rad-windows-build.yml'
       - 'payload_v052/v052_ready.marker'
       - 'payload_v052/v052_build_hotfix.patch'
+      - 'payload_v052/v060_timeline.patch'
+      - 'tools/rad_replay_timeline.py'
+      - 'REPLAY_TIMELINE_README_JA.txt'
   workflow_dispatch:
 
 env:
@@ -28,7 +31,7 @@ env:
   AR: /usr/local/bin/i686-w64-mingw32-gcc-ar
 
 concurrency:
-  group: rad-edopro-v052-windows-main
+  group: rad-edopro-v060-windows-main
   cancel-in-progress: true
 
 jobs:
@@ -67,17 +70,27 @@ jobs:
             git -C edopro/ocgcore/lua/src checkout "$LUA_COMMIT"
           fi
 
-      - name: Apply RAD v0.5.2 source overlay
+      - name: Apply RAD v0.6 source patches
         shell: bash
         run: |
           set -euo pipefail
           cp -a /tmp/rad_overlay/. edopro/
           git -C edopro apply "$GITHUB_WORKSPACE/payload_v052/v052_build_hotfix.patch"
+          git -C edopro apply "$GITHUB_WORKSPACE/payload_v052/v060_timeline.patch"
           test -f edopro/gframe/rad_client.cpp
           test -f edopro/gframe/replay_pace.h
+          test -f edopro/gframe/replay_timeline.h
           grep -q 'replay_pace_percent' edopro/gframe/game_config.inl
           grep -q 'OCG_DuelSetActionCard' edopro/ocgcore/ocgapi.h
           grep -q 'GetPos(DuelPlayer\* dp) const' edopro/gframe/generic_duel.h
+          grep -q 'ReplayTimeline::MESSAGE_ID' edopro/gframe/replay_mode.cpp
+
+      - name: Validate timeline editor syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/rad_replay_timeline.py
+          python3 tools/rad_replay_timeline.py --help >/dev/null
 
       - name: Configure dependency cache
         shell: bash
@@ -138,7 +151,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          OUT="$GITHUB_WORKSPACE/artifact/RAD_EDOPro_v0.5.2_replay_pace_Windows"
+          OUT="$GITHUB_WORKSPACE/artifact/RAD_EDOPro_v0.6_replay_timeline_Windows"
           mkdir -p "$OUT"
           EXE="$(find edopro/bin -type f -name 'ygoprodll.exe' -print -quit)"
           CORE="$(find edopro/bin -type f -name 'ocgcore.dll' -print -quit)"
@@ -146,19 +159,29 @@ jobs:
           test -n "$CORE" && test -f "$CORE"
           cp "$EXE" "$OUT/EDOPro.exe"
           cp "$CORE" "$OUT/ocgcore.dll"
+          cp tools/rad_replay_timeline.py "$OUT/rad_replay_timeline.py"
+          cp REPLAY_TIMELINE_README_JA.txt "$OUT/REPLAY_TIMELINE_README_JA.txt"
+          cat > "$OUT/timeline_example.txt" <<'EOF'
+          # packet indexes are 0-based; use inspect first
+          before 120 pace 65
+          before 120 wait 1200
+          after 145 reset
+          before 200 pause
+          EOF
           printf '%s\n' \
-            'RAD EDOPro v0.5.2-replay-pace Windows binaries' \
+            'RAD EDOPro v0.6 replay timeline Windows binaries' \
             "EDOPro upstream: $EDOPRO_COMMIT" \
             "ygopro-core upstream: $CORE_COMMIT" \
-            'Replay pace: 50%-150%, default 85%.' \
+            'Manual Replay Pace: 50%-150%, default 85%.' \
+            'Embedded replay timeline: PACE / WAIT / RESET / PAUSE.' \
             > "$OUT/WINDOWS_BINARY_STATUS.txt"
           find "$OUT" -type f \( -iname '*.otf' -o -iname '*.ttf' \) -delete
-          (cd "$OUT" && sha256sum EDOPro.exe ocgcore.dll > WINDOWS_SHA256.txt)
+          (cd "$OUT" && sha256sum EDOPro.exe ocgcore.dll rad_replay_timeline.py > WINDOWS_SHA256.txt)
 
       - name: Upload RAD Windows binaries
         uses: actions/upload-artifact@v4
         with:
-          name: RAD_EDOPro_v0.5.2_replay_pace_Windows
-          path: artifact/RAD_EDOPro_v0.5.2_replay_pace_Windows
+          name: RAD_EDOPro_v0.6_replay_timeline_Windows
+          path: artifact/RAD_EDOPro_v0.6_replay_timeline_Windows
           if-no-files-found: error
           retention-days: 30
