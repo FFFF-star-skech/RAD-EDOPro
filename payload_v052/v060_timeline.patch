@@ -1,0 +1,203 @@
+--- a/gframe/replay_timeline.h
++++ b/gframe/replay_timeline.h
+@@ -0,0 +1,45 @@
++#ifndef REPLAY_TIMELINE_H
++#define REPLAY_TIMELINE_H
++
++#include <cstdint>
++#include "core_utils.h"
++
++namespace ygo::ReplayTimeline {
++
++// RAD-only replay packet. Standard .yrpX files never contain this packet.
++constexpr uint8_t MESSAGE_ID = 232;
++constexpr uint8_t VERSION = 1;
++constexpr uint32_t MAX_WAIT_MS = 10u * 60u * 1000u;
++
++enum class Op : uint8_t {
++	Pace = 1,
++	Wait = 2,
++	Reset = 3,
++	Pause = 4,
++};
++
++struct Command {
++	Op op{ Op::Reset };
++	uint32_t value{};
++};
++
++inline bool Parse(const CoreUtils::Packet& packet, Command& out) {
++	if(packet.message != MESSAGE_ID || packet.buff_size() != 6)
++		return false;
++	const auto* data = packet.data();
++	if(data[0] != VERSION)
++		return false;
++	const auto raw_op = data[1];
++	if(raw_op < static_cast<uint8_t>(Op::Pace) || raw_op > static_cast<uint8_t>(Op::Pause))
++		return false;
++	out.op = static_cast<Op>(raw_op);
++	out.value = static_cast<uint32_t>(data[2])
++		| (static_cast<uint32_t>(data[3]) << 8)
++		| (static_cast<uint32_t>(data[4]) << 16)
++		| (static_cast<uint32_t>(data[5]) << 24);
++	return true;
++}
++
++} // namespace ygo::ReplayTimeline
++
++#endif // REPLAY_TIMELINE_H
+--- a/gframe/replay_pace.h
++++ b/gframe/replay_pace.h
+@@ -10,10 +10,30 @@
+ constexpr int STEP_PERCENT = 5;
+ constexpr int DEFAULT_PERCENT = 85;
+ 
++// A timeline override lives only for the current replay. A value of 0 means
++// "follow the user's normal replay pace setting".
++inline int timeline_override_percent = 0;
++
+ constexpr int ClampPercent(int percent) {
+ 	return percent < MIN_PERCENT ? MIN_PERCENT : (percent > MAX_PERCENT ? MAX_PERCENT : percent);
+ }
+ 
++inline void SetTimelinePercent(int percent) {
++	timeline_override_percent = ClampPercent(percent);
++}
++
++inline void ClearTimelinePercent() {
++	timeline_override_percent = 0;
++}
++
++inline bool HasTimelinePercent() {
++	return timeline_override_percent != 0;
++}
++
++inline int EffectivePercent(int user_percent) {
++	return timeline_override_percent ? timeline_override_percent : ClampPercent(user_percent);
++}
++
+ constexpr int ScaleMilliseconds(int milliseconds, bool is_replay, bool is_catching_up, int pace_percent) {
+ 	if(milliseconds <= 0 || !is_replay || is_catching_up)
+ 		return milliseconds;
+--- a/gframe/drawing.cpp
++++ b/gframe/drawing.cpp
+@@ -1177,7 +1177,7 @@
+ 	else ShowElement(element, hideframe);
+ }
+ void Game::WaitFrameSignal(int frame, std::unique_lock<epro::mutex>& _lck) {
+-	signalFrame = ReplayPace::WaitMillisecondsFromFrames(frame, gGameConfig->quick_animation, dInfo.isReplay, dInfo.isCatchingUp, gGameConfig->replay_pace_percent);
++	signalFrame = ReplayPace::WaitMillisecondsFromFrames(frame, gGameConfig->quick_animation, dInfo.isReplay, dInfo.isCatchingUp, ReplayPace::EffectivePercent(gGameConfig->replay_pace_percent));
+ 	frameSignal.Wait(_lck);
+ }
+ void Game::DrawThumb(const CardDataC* cp, irr::core::vector2di pos, LFList* lflist, bool drag, const irr::core::recti* cliprect, bool load_image) {
+--- a/gframe/game.cpp
++++ b/gframe/game.cpp
+@@ -2525,6 +2525,7 @@
+ 	btnReplayPaceReset->setText(epro::format(L"{}%", gGameConfig->replay_pace_percent).data());
+ }
+ void Game::ChangeReplayPace(int delta_percent) {
++	ReplayPace::ClearTimelinePercent();
+ 	gGameConfig->replay_pace_percent = ReplayPace::ClampPercent(gGameConfig->replay_pace_percent + delta_percent);
+ 	RefreshReplayPaceControl();
+ }
+--- a/gframe/event_handler.cpp
++++ b/gframe/event_handler.cpp
+@@ -12,6 +12,7 @@
+ #include "data_manager.h"
+ #include "image_manager.h"
+ #include "replay_mode.h"
++#include "replay_pace.h"
+ #include "single_mode.h"
+ #include "materials.h"
+ #include "progressivebuffer.h"
+@@ -137,6 +138,7 @@
+ 			}
+ 			case BUTTON_REPLAY_PACE_RESET: {
+ 				if(mainGame->dInfo.isReplay) {
++					ReplayPace::ClearTimelinePercent();
+ 					gGameConfig->replay_pace_percent = 100;
+ 					mainGame->RefreshReplayPaceControl();
+ 				}
+--- a/gframe/replay_mode.cpp
++++ b/gframe/replay_mode.cpp
+@@ -1,7 +1,11 @@
+ #include <IrrlichtDevice.h>
+ #include <IGUIWindow.h>
+ #include <IGUIStaticText.h>
++#include <chrono>
++#include <algorithm>
+ #include "replay_mode.h"
++#include "replay_pace.h"
++#include "replay_timeline.h"
+ #include "duelclient.h"
+ #include "game.h"
+ #include "single_mode.h"
+@@ -26,6 +30,7 @@
+ epro::thread ReplayMode::replay_thread;
+ 
+ bool ReplayMode::StartReplay(int skipturn, bool is_yrp) {
++	ReplayPace::ClearTimelinePercent();
+ 	if(mainGame->dInfo.isReplay)
+ 		return false;
+ 	skip_turn = skipturn;
+@@ -149,6 +154,7 @@
+ 	return 0;
+ }
+ void ReplayMode::EndDuel() {
++	ReplayPace::ClearTimelinePercent();
+ 	if(pduel) {
+ 		pduel = nullptr;
+ 	}
+@@ -175,6 +181,7 @@
+ 	}
+ }
+ void ReplayMode::Restart(bool refresh) {
++	ReplayPace::ClearTimelinePercent();
+ 	if(pduel) {
+ 		pduel = nullptr;
+ 		//end_duel(pduel);
+@@ -212,6 +219,44 @@
+ }
+ bool ReplayMode::ReplayAnalyze(const CoreUtils::Packet& p) {
+ 	is_restarting = false;
++	if(p.message == ReplayTimeline::MESSAGE_ID) {
++		ReplayTimeline::Command command;
++		if(!ReplayTimeline::Parse(p, command))
++			return true;
++		switch(command.op) {
++		case ReplayTimeline::Op::Pace:
++			ReplayPace::SetTimelinePercent(static_cast<int>(command.value));
++			return true;
++		case ReplayTimeline::Op::Reset:
++			ReplayPace::ClearTimelinePercent();
++			return true;
++		case ReplayTimeline::Op::Wait: {
++			if(mainGame->dInfo.isCatchingUp)
++				return true;
++			auto remaining = std::min(command.value, ReplayTimeline::MAX_WAIT_MS);
++			while(remaining && is_continuing && !exit_pending && !is_closing) {
++				const auto slice = std::min<uint32_t>(remaining, 10);
++				epro::this_thread::sleep_for(std::chrono::milliseconds(slice));
++				remaining -= slice;
++			}
++			return is_continuing && !exit_pending;
++		}
++		case ReplayTimeline::Op::Pause: {
++			if(mainGame->dInfo.isCatchingUp)
++				return true;
++			mainGame->btnReplayStart->setVisible(true);
++			mainGame->btnReplayPause->setVisible(false);
++			mainGame->btnReplayStep->setVisible(true);
++			mainGame->btnReplayUndo->setVisible(true);
++			is_pausing = true;
++			is_paused = true;
++			std::unique_lock<epro::mutex> lock(mainGame->gMutex);
++			mainGame->actionSignal.Wait(lock);
++			is_paused = false;
++			return is_continuing && !exit_pending;
++		}
++		}
++	}
+ 	{
+ 		if(is_closing)
+ 			return false;
