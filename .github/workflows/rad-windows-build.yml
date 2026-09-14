@@ -5,13 +5,14 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/rad-windows-build.yml'
-      - 'build_payload/**'
+      - 'payload_v052/**'
   workflow_dispatch:
 
 env:
   EDOPRO_COMMIT: 589ad27d2cc69efc4bf51d7e61c426ae4b1ae3f5
   CORE_COMMIT: 122e0d091a0f399221a4510cc98a406ae485905f
   LUA_COMMIT: 6e22fedb74cf0c9b6656e9fce8b7331db847c605
+  OVERLAY_SHA256: beb6687bc1b1aa199d28e8d1f5c4e092ab6344b59562f5e496f965440c7ee1ed
   DEPENDENCIES_BASE_URL: https://github.com/edo9300/edopro-vcpkg-cache/releases/latest/download
   TRAVIS_OS_NAME: linux
   TARGET_OS: windows
@@ -37,19 +38,18 @@ jobs:
       - name: Checkout RAD build repository
         uses: actions/checkout@v4
 
-      - name: Reconstruct verified v0.5.1 RAD source payload
+      - name: Reconstruct and verify RAD v0.5.2 overlay
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/rad_src
-          cat build_payload/src.b64.part* | tr -d '\n\r' | base64 --decode > /tmp/rad_source.tar.gz
-          gzip -t /tmp/rad_source.tar.gz
-          tar -xzf /tmp/rad_source.tar.gz -C /tmp/rad_src
-          RAD_MARKER="$(find /tmp/rad_src -type f -path '*/gframe/rad_client.cpp' -print -quit)"
-          test -n "$RAD_MARKER" && test -f "$RAD_MARKER"
-          RAD_OVERLAY_ROOT="${RAD_MARKER%/gframe/rad_client.cpp}"
-          echo "RAD_OVERLAY_ROOT=$RAD_OVERLAY_ROOT" >> "$GITHUB_ENV"
-          echo "Using RAD overlay root: $RAD_OVERLAY_ROOT"
+          cat payload_v052/overlay.xz.b64.part* | tr -d '\n\r' | base64 --decode > /tmp/rad_overlay.tar.xz
+          echo "$OVERLAY_SHA256  /tmp/rad_overlay.tar.xz" | sha256sum -c -
+          xz -t /tmp/rad_overlay.tar.xz
+          mkdir -p /tmp/rad_overlay
+          tar -xJf /tmp/rad_overlay.tar.xz -C /tmp/rad_overlay
+          test -f /tmp/rad_overlay/gframe/rad_client.cpp
+          test -f /tmp/rad_overlay/gframe/replay_pace.h
+          test -f /tmp/rad_overlay/ocgcore/ocgapi.cpp
 
       - name: Checkout pinned upstream EDOPro and core
         shell: bash
@@ -66,27 +66,19 @@ jobs:
             git -C edopro/ocgcore/lua/src checkout "$LUA_COMMIT"
           fi
 
-      - name: Apply RAD v0.5.1 source overlay
+      - name: Apply RAD v0.5.2 source overlay
         shell: bash
         run: |
           set -euo pipefail
-          cp -a "$RAD_OVERLAY_ROOT"/. edopro/
+          cp -a /tmp/rad_overlay/. edopro/
           test -f edopro/gframe/rad_client.cpp
-          grep -q 'OCG_DuelSetActionCard' edopro/ocgcore/ocgapi.h
-
-      - name: Apply v0.5.2 replay pace patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          patch -p1 < build_payload/v0.5.2-replay-pace-gframe.patch
           test -f edopro/gframe/replay_pace.h
           grep -q 'replay_pace_percent' edopro/gframe/game_config.inl
-          grep -q 'BUTTON_REPLAY_PACE_DOWN' edopro/gframe/event_handler.cpp
+          grep -q 'OCG_DuelSetActionCard' edopro/ocgcore/ocgapi.h
 
       - name: Configure dependency cache
         shell: bash
-        run: |
-          echo "VCPKG_CACHE_ZIP_URL=$DEPENDENCIES_BASE_URL/installed_x86-windows-mingw-static.zip" >> "$GITHUB_ENV"
+        run: echo "VCPKG_CACHE_ZIP_URL=$DEPENDENCIES_BASE_URL/installed_x86-windows-mingw-static.zip" >> "$GITHUB_ENV"
 
       - name: Install runner prerequisites
         shell: bash
@@ -131,17 +123,11 @@ jobs:
           test -n "$CORE" && test -f "$CORE"
           cp "$EXE" "$OUT/EDOPro.exe"
           cp "$CORE" "$OUT/ocgcore.dll"
-          RUNTIME_DB="$(find /tmp/rad_src -type f -path '*/runtime_overlay/expansions/RAD-actions.cdb' -print -quit || true)"
-          if [ -n "$RUNTIME_DB" ]; then
-            RUNTIME_ROOT="${RUNTIME_DB%/expansions/RAD-actions.cdb}"
-            cp -a "$RUNTIME_ROOT"/. "$OUT/"
-          fi
           printf '%s\n' \
             'RAD EDOPro v0.5.2-replay-pace Windows binaries' \
             "EDOPro upstream: $EDOPRO_COMMIT" \
             "ygopro-core upstream: $CORE_COMMIT" \
-            'Includes replay pace control: 50%-150%, default 85%.' \
-            'Built by GitHub Actions from the RAD v0.5.1 source payload plus the v0.5.2 replay pace patch.' \
+            'Replay pace: 50%-150%, default 85%.' \
             > "$OUT/WINDOWS_BINARY_STATUS.txt"
           find "$OUT" -type f \( -iname '*.otf' -o -iname '*.ttf' \) -delete
           (cd "$OUT" && sha256sum EDOPro.exe ocgcore.dll > WINDOWS_SHA256.txt)
