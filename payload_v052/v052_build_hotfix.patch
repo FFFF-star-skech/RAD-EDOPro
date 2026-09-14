@@ -1,0 +1,24 @@
+diff --git a/gframe/generic_duel.h b/gframe/generic_duel.h
+--- a/gframe/generic_duel.h
++++ b/gframe/generic_duel.h
+@@ -98,7 +98,7 @@ protected:
+ 	void SetAtPos(DuelPlayer* dp, size_t pos);
+ 	duelist& GetAtPos(uint8_t pos);
+ 	void Catchup(DuelPlayer* dp);
+-	uint8_t GetPos(DuelPlayer* dp);
++	uint8_t GetPos(DuelPlayer* dp) const;
+ 	uint8_t CoreDuelistIndexForSeat(uint8_t seat) const;
+ 	uint8_t ActionTurnSeat(uint8_t team) const;
+ 	void OrderPlayers(std::vector<duelist>& players, size_t offset = 0);
+diff --git a/gframe/generic_duel.cpp b/gframe/generic_duel.cpp
+--- a/gframe/generic_duel.cpp
++++ b/gframe/generic_duel.cpp
+@@ -113,7 +113,7 @@ int8_t GenericDuel::GetFirstFree(int8_t start) {
+ 	}
+ 	return -1;
+ }
+-uint8_t GenericDuel::GetPos(DuelPlayer* dp) {
++uint8_t GenericDuel::GetPos(DuelPlayer* dp) const {
+ 	for(size_t i = 0; i < players.home.size(); i++) {
+ 		if(players.home[i] == dp)
+ 			return static_cast<uint8_t>(i);
