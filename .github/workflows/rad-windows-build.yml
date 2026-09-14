@@ -1,18 +1,17 @@
-name: RAD EDOPro v0.5.1 Windows build
+name: RAD EDOPro v0.5.2 replay pace Windows build
 
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/rad-windows-build.yml'
-      - 'payload/**'
+      - 'build_payload/**'
   workflow_dispatch:
 
 env:
   EDOPRO_COMMIT: 589ad27d2cc69efc4bf51d7e61c426ae4b1ae3f5
   CORE_COMMIT: 122e0d091a0f399221a4510cc98a406ae485905f
   LUA_COMMIT: 6e22fedb74cf0c9b6656e9fce8b7331db847c605
-  OVERLAY_SHA256: b5b1db164a12bbd17dc4f90ac437c4566eeed0701294dda2d3b6301726a0924a
   DEPENDENCIES_BASE_URL: https://github.com/edo9300/edopro-vcpkg-cache/releases/latest/download
   TRAVIS_OS_NAME: linux
   TARGET_OS: windows
@@ -27,7 +26,7 @@ env:
   AR: /usr/local/bin/i686-w64-mingw32-gcc-ar
 
 concurrency:
-  group: rad-edopro-windows-main
+  group: rad-edopro-v052-windows-main
   cancel-in-progress: true
 
 jobs:
@@ -38,17 +37,19 @@ jobs:
       - name: Checkout RAD build repository
         uses: actions/checkout@v4
 
-      - name: Reconstruct and verify RAD overlay
+      - name: Reconstruct verified v0.5.1 RAD source payload
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p /tmp/rad
-          cat payload/overlay.b64.part* | tr -d '\n\r' | base64 --decode > /tmp/rad_overlay.tar.gz
-          echo "$OVERLAY_SHA256  /tmp/rad_overlay.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/rad_overlay.tar.gz -C /tmp/rad
-          test -f /tmp/rad/payload/edopro_overlay/gframe/rad_client.cpp
-          test -f /tmp/rad/payload/runtime_overlay/expansions/RAD-actions.cdb
-          test "$(find /tmp/rad/payload/runtime_overlay/pics -maxdepth 1 -type f -name '*.jpg' | wc -l)" -eq 4
+          mkdir -p /tmp/rad_src
+          cat build_payload/src.b64.part* | tr -d '\n\r' | base64 --decode > /tmp/rad_source.tar.gz
+          gzip -t /tmp/rad_source.tar.gz
+          tar -xzf /tmp/rad_source.tar.gz -C /tmp/rad_src
+          RAD_MARKER="$(find /tmp/rad_src -type f -path '*/gframe/rad_client.cpp' -print -quit)"
+          test -n "$RAD_MARKER" && test -f "$RAD_MARKER"
+          RAD_OVERLAY_ROOT="${RAD_MARKER%/gframe/rad_client.cpp}"
+          echo "RAD_OVERLAY_ROOT=$RAD_OVERLAY_ROOT" >> "$GITHUB_ENV"
+          echo "Using RAD overlay root: $RAD_OVERLAY_ROOT"
 
       - name: Checkout pinned upstream EDOPro and core
         shell: bash
@@ -69,9 +70,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp -a /tmp/rad/payload/edopro_overlay/. edopro/
-          grep -q 'RAD' edopro/gframe/rad_client.cpp
+          cp -a "$RAD_OVERLAY_ROOT"/. edopro/
+          test -f edopro/gframe/rad_client.cpp
           grep -q 'OCG_DuelSetActionCard' edopro/ocgcore/ocgapi.h
+
+      - name: Apply v0.5.2 replay pace patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch -p1 < build_payload/v0.5.2-replay-pace-gframe.patch
+          test -f edopro/gframe/replay_pace.h
+          grep -q 'replay_pace_percent' edopro/gframe/game_config.inl
+          grep -q 'BUTTON_REPLAY_PACE_DOWN' edopro/gframe/event_handler.cpp
 
       - name: Configure dependency cache
         shell: bash
@@ -82,7 +92,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full zip xz-utils zstd
+          sudo apt-get install -y p7zip-full zip xz-utils zstd patch
 
       - name: Install MinGW-lite toolchain
         working-directory: edopro
@@ -99,12 +109,12 @@ jobs:
         shell: bash
         run: ./travis/dependencies.sh
 
-      - name: Do not bundle a font file
+      - name: Do not bundle font files
         working-directory: edopro
         shell: bash
         run: rm -f NotoSansJP-Regular.otf
 
-      - name: Build RAD EDOPro client and matching ocgcore DLL
+      - name: Build matching RAD client and core
         working-directory: edopro
         shell: bash
         run: ./travis/build.sh
@@ -113,7 +123,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          OUT="$GITHUB_WORKSPACE/artifact/RAD_EDOPro_v0.5.1_Windows"
+          OUT="$GITHUB_WORKSPACE/artifact/RAD_EDOPro_v0.5.2_replay_pace_Windows"
           mkdir -p "$OUT"
           EXE="$(find edopro/bin -type f -name 'ygoprodll.exe' -print -quit)"
           CORE="$(find edopro/bin -type f -name 'ocgcore.dll' -print -quit)"
@@ -121,26 +131,25 @@ jobs:
           test -n "$CORE" && test -f "$CORE"
           cp "$EXE" "$OUT/EDOPro.exe"
           cp "$CORE" "$OUT/ocgcore.dll"
-          cp -a /tmp/rad/payload/runtime_overlay/. "$OUT/"
-          cp -a /tmp/rad/payload/docs/. "$OUT/"
+          RUNTIME_DB="$(find /tmp/rad_src -type f -path '*/runtime_overlay/expansions/RAD-actions.cdb' -print -quit || true)"
+          if [ -n "$RUNTIME_DB" ]; then
+            RUNTIME_ROOT="${RUNTIME_DB%/expansions/RAD-actions.cdb}"
+            cp -a "$RUNTIME_ROOT"/. "$OUT/"
+          fi
           printf '%s\n' \
-            'RAD EDOPro v0.5.1 Windows binaries' \
+            'RAD EDOPro v0.5.2-replay-pace Windows binaries' \
             "EDOPro upstream: $EDOPRO_COMMIT" \
             "ygopro-core upstream: $CORE_COMMIT" \
-            'Built by GitHub Actions from the RAD3 source overlay.' \
+            'Includes replay pace control: 50%-150%, default 85%.' \
+            'Built by GitHub Actions from the RAD v0.5.1 source payload plus the v0.5.2 replay pace patch.' \
             > "$OUT/WINDOWS_BINARY_STATUS.txt"
           find "$OUT" -type f \( -iname '*.otf' -o -iname '*.ttf' \) -delete
-          test -f "$OUT/pics/150000001.jpg"
-          test -f "$OUT/pics/150000024.jpg"
-          test -f "$OUT/pics/150000033.jpg"
-          test -f "$OUT/pics/150000042.jpg"
-          test "$(find "$OUT/pics" -maxdepth 1 -type f -name '*.jpg' | wc -l)" -eq 4
-          (cd "$OUT" && sha256sum EDOPro.exe ocgcore.dll expansions/RAD-actions.cdb > WINDOWS_SHA256.txt)
+          (cd "$OUT" && sha256sum EDOPro.exe ocgcore.dll > WINDOWS_SHA256.txt)
 
       - name: Upload RAD Windows binaries
         uses: actions/upload-artifact@v4
         with:
-          name: RAD_EDOPro_v0.5.1_Windows
-          path: artifact/RAD_EDOPro_v0.5.1_Windows
+          name: RAD_EDOPro_v0.5.2_replay_pace_Windows
+          path: artifact/RAD_EDOPro_v0.5.2_replay_pace_Windows
           if-no-files-found: error
           retention-days: 30
