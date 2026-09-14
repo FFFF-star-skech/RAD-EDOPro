@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/rad-windows-build.yml'
       - 'payload_v052/v052_ready.marker'
+      - 'payload_v052/v052_build_hotfix.patch'
   workflow_dispatch:
 
 env:
@@ -71,10 +72,12 @@ jobs:
         run: |
           set -euo pipefail
           cp -a /tmp/rad_overlay/. edopro/
+          git -C edopro apply "$GITHUB_WORKSPACE/payload_v052/v052_build_hotfix.patch"
           test -f edopro/gframe/rad_client.cpp
           test -f edopro/gframe/replay_pace.h
           grep -q 'replay_pace_percent' edopro/gframe/game_config.inl
           grep -q 'OCG_DuelSetActionCard' edopro/ocgcore/ocgapi.h
+          grep -q 'GetPos(DuelPlayer\* dp) const' edopro/gframe/generic_duel.h
 
       - name: Configure dependency cache
         shell: bash
