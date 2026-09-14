@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/rad-windows-build.yml'
-      - 'payload_v052/**'
+      - 'payload_v052/v052_ready.marker'
   workflow_dispatch:
 
 env:
