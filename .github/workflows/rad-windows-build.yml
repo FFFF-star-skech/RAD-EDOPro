@@ -110,6 +110,7 @@ jobs:
         working-directory: edopro
         shell: bash
         run: |
+          chmod +x ./travis/build.sh
           set +e
           ./travis/build.sh > "$GITHUB_WORKSPACE/rad-build.log" 2>&1
           status=$?
