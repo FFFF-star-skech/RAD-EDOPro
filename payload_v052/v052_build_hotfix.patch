@@ -1,7 +1,6 @@
-diff --git a/gframe/generic_duel.h b/gframe/generic_duel.h
 --- a/gframe/generic_duel.h
 +++ b/gframe/generic_duel.h
-@@ -98,7 +98,7 @@ protected:
+@@ -98,7 +98,7 @@
  	void SetAtPos(DuelPlayer* dp, size_t pos);
  	duelist& GetAtPos(uint8_t pos);
  	void Catchup(DuelPlayer* dp);
@@ -10,10 +9,9 @@ diff --git a/gframe/generic_duel.h b/gframe/generic_duel.h
  	uint8_t CoreDuelistIndexForSeat(uint8_t seat) const;
  	uint8_t ActionTurnSeat(uint8_t team) const;
  	void OrderPlayers(std::vector<duelist>& players, size_t offset = 0);
-diff --git a/gframe/generic_duel.cpp b/gframe/generic_duel.cpp
 --- a/gframe/generic_duel.cpp
 +++ b/gframe/generic_duel.cpp
-@@ -113,7 +113,7 @@ int8_t GenericDuel::GetFirstFree(int8_t start) {
+@@ -113,7 +113,7 @@
  	}
  	return -1;
  }
@@ -22,3 +20,34 @@ diff --git a/gframe/generic_duel.cpp b/gframe/generic_duel.cpp
  	for(size_t i = 0; i < players.home.size(); i++) {
  		if(players.home[i] == dp)
  			return static_cast<uint8_t>(i);
+--- a/gframe/rad_client.cpp
++++ b/gframe/rad_client.cpp
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: AGPL-3.0-or-later
+ #include "rad_client.h"
+ #include "game.h"
++#include "client_card.h"
+ #include "duelclient.h"
+ #include <mutex>
+ #include <sstream>
+@@ -19,9 +20,9 @@
+ irr::gui::IGUIStaticText* info=nullptr;
+ irr::gui::IGUIButton* buttons[9]{};
+ const wchar_t* cardName(int c){static const wchar_t* names[]={L"空き",L"奇跡",L"ハイ・ダイブ",L"回避",L"加速"};return c>=0&&c<=4?names[c]:L"?";}
+-epro::wstring shortCardName(uint32_t code){
++std::wstring shortCardName(uint32_t code){
+  if(!code) return L"-";
+- auto name=gDataManager->GetName(code);
++ std::wstring name{gDataManager->GetName(code)};
+  if(name.size()>8){name.resize(7);name+=L"…";}
+  return name;
+ }
+@@ -51,7 +52,7 @@
+  else if(v.elapsed<30000)text<<L"猶予残り "<<(30000-v.elapsed+999)/1000<<L"秒\n";
+  else text<<L"次のACまで "<<(15000-(v.elapsed-30000)%15000+999)/1000<<L"秒"<<(v.warning?L" / 長考警告":L"")<<L"\n";
+  for(int p=0;p<rad::MaxDuelists;p++){const auto& rp=v.players[p];if(rp.ac||rp.slot!=rad::Card::None||rp.moving||rp.pzone[0]||rp.pzone[1]||p==v.self||p==v.judge||p==v.award){
+-  text << (v.self == p ? epro::wstring{L"自分"} : epro::format(L"席{}", p + 1)) << L": " << rp.ac << L"AC / " << cardName(int(rp.slot));
++  text << (v.self == p ? std::wstring{L"自分"} : epro::format(L"席{}", p + 1)) << L": " << rp.ac << L"AC / " << cardName(int(rp.slot));
+   text << L" / P[" << shortCardName(rp.pzone[0]) << L" | " << shortCardName(rp.pzone[1]) << L"]\n";
+  }}
+  text<<(v.unlocked?(v.opening>=0?L"後攻の開幕取得権":L"取得解禁"):L"開幕取得ロック")<<L"\n";
