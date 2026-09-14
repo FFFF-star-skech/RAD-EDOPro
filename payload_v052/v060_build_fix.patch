@@ -1,0 +1,10 @@
+--- a/gframe/replay_mode.cpp
++++ b/gframe/replay_mode.cpp
+@@ -1,6 +1,7 @@
+ #include <IrrlichtDevice.h>
+ #include <IGUIWindow.h>
+ #include <IGUIStaticText.h>
++#include <IGUIButton.h>
+ #include <chrono>
+ #include <algorithm>
+ #include "replay_mode.h"
