@@ -1,0 +1,184 @@
+diff --git a/edopro/gframe/drawing.cpp b/edopro/gframe/drawing.cpp
+index 918406c..5449025 100644
+--- a/edopro/gframe/drawing.cpp
++++ b/edopro/gframe/drawing.cpp
+@@ -1,4 +1,5 @@
+ #include "game_config.h"
++#include "replay_pace.h"
+ #include <irrlicht.h>
+ #include "game.h"
+ #include "materials.h"
+@@ -1176,7 +1177,7 @@ void Game::PopupElement(irr::gui::IGUIElement * element, int hideframe) {
+ 	else ShowElement(element, hideframe);
+ }
+ void Game::WaitFrameSignal(int frame, std::unique_lock<epro::mutex>& _lck) {
+-	signalFrame = (gGameConfig->quick_animation && frame >= 12) ? 12 * 1000 / 60 : frame * 1000 / 60;
++	signalFrame = ReplayPace::WaitMillisecondsFromFrames(frame, gGameConfig->quick_animation, dInfo.isReplay, dInfo.isCatchingUp, gGameConfig->replay_pace_percent);
+ 	frameSignal.Wait(_lck);
+ }
+ void Game::DrawThumb(const CardDataC* cp, irr::core::vector2di pos, LFList* lflist, bool drag, const irr::core::recti* cliprect, bool load_image) {
+diff --git a/edopro/gframe/event_handler.cpp b/edopro/gframe/event_handler.cpp
+index 6e4380f..4720304 100644
+--- a/edopro/gframe/event_handler.cpp
++++ b/edopro/gframe/event_handler.cpp
+@@ -130,6 +130,23 @@ bool ClientField::OnEvent(const irr::SEvent& event) {
+ 				ReplayMode::Undo();
+ 				break;
+ 			}
++			case BUTTON_REPLAY_PACE_DOWN: {
++				if(mainGame->dInfo.isReplay)
++					mainGame->ChangeReplayPace(-5);
++				break;
++			}
++			case BUTTON_REPLAY_PACE_RESET: {
++				if(mainGame->dInfo.isReplay) {
++					gGameConfig->replay_pace_percent = 100;
++					mainGame->RefreshReplayPaceControl();
++				}
++				break;
++			}
++			case BUTTON_REPLAY_PACE_UP: {
++				if(mainGame->dInfo.isReplay)
++					mainGame->ChangeReplayPace(5);
++				break;
++			}
+ 			case BUTTON_FILE_SAVE: {
+ 				if(mainGame->ebFileSaveName->getText()[0] == 0)
+ 					break;
+diff --git a/edopro/gframe/game.cpp b/edopro/gframe/game.cpp
+index 817e286..1cebca3 100644
+--- a/edopro/gframe/game.cpp
++++ b/edopro/gframe/game.cpp
+@@ -19,6 +19,7 @@
+ #include "duelclient.h"
+ #include "netserver.h"
+ #include "replay_mode.h"
++#include "replay_pace.h"
+ #include "single_mode.h"
+ #include "CGUICustomCheckBox/CGUICustomCheckBox.h"
+ #include "CGUICustomTable/CGUICustomTable.h"
+@@ -829,7 +830,7 @@ void Game::Initialize() {
+ 	btnFileSaveNo = env->addButton(Scale(170, 80, 240, 105), wFileSave, BUTTON_FILE_CANCEL, gDataManager->GetSysString(1212).data());
+ 	defaultStrings.emplace_back(btnFileSaveNo, 1212);
+ 	//replay control
+-	wReplayControl = AlignElementWithParent(env->addStaticText(L"", Scale(205, 143, 295, 273), true, false, 0, -1, true));
++	wReplayControl = AlignElementWithParent(env->addStaticText(L"", Scale(205, 143, 295, 303), true, false, 0, -1, true));
+ 	wReplayControl->setVisible(false);
+ 	btnReplayStart = AlignElementWithParent(env->addButton(Scale(5, 5, 85, 25), wReplayControl, BUTTON_REPLAY_START, gDataManager->GetSysString(1343).data()));
+ 	defaultStrings.emplace_back(btnReplayStart, 1343);
+@@ -843,6 +844,10 @@ void Game::Initialize() {
+ 	defaultStrings.emplace_back(btnReplaySwap, 1346);
+ 	btnReplayExit = AlignElementWithParent(env->addButton(Scale(5, 105, 85, 125), wReplayControl, BUTTON_REPLAY_EXIT, gDataManager->GetSysString(1347).data()));
+ 	defaultStrings.emplace_back(btnReplayExit, 1347);
++	btnReplayPaceDown = AlignElementWithParent(env->addButton(Scale(5, 130, 20, 150), wReplayControl, BUTTON_REPLAY_PACE_DOWN, L"-"));
++	btnReplayPaceReset = AlignElementWithParent(env->addButton(Scale(22, 130, 68, 150), wReplayControl, BUTTON_REPLAY_PACE_RESET, L"85%"));
++	btnReplayPaceUp = AlignElementWithParent(env->addButton(Scale(70, 130, 85, 150), wReplayControl, BUTTON_REPLAY_PACE_UP, L"+"));
++	RefreshReplayPaceControl();
+ 	//chat
+ 	wChat = AlignElementWithParent(env->addWindow(Scale(305, 615, 1020, 640), false, L""));
+ 	wChat->getCloseButton()->setVisible(false);
+@@ -2513,6 +2518,16 @@ void Game::RefreshAiDecks() {
+ 		ErrorLog("Failed to open WindBot Ignite config json!");
+ 	}
+ }
++void Game::RefreshReplayPaceControl() {
++	if(!btnReplayPaceReset)
++		return;
++	gGameConfig->replay_pace_percent = ReplayPace::ClampPercent(gGameConfig->replay_pace_percent);
++	btnReplayPaceReset->setText(epro::format(L"{}%", gGameConfig->replay_pace_percent).data());
++}
++void Game::ChangeReplayPace(int delta_percent) {
++	gGameConfig->replay_pace_percent = ReplayPace::ClampPercent(gGameConfig->replay_pace_percent + delta_percent);
++	RefreshReplayPaceControl();
++}
+ void Game::RefreshReplay() {
+ 	lstReplayList->resetPath();
+ }
+diff --git a/edopro/gframe/game.h b/edopro/gframe/game.h
+index 2fcb918..15f1b17 100644
+--- a/edopro/gframe/game.h
++++ b/edopro/gframe/game.h
+@@ -492,6 +492,9 @@ struct game_field_elements {
+ 	irr::gui::IGUIButton* btnReplayUndo;
+ 	irr::gui::IGUIButton* btnReplayExit;
+ 	irr::gui::IGUIButton* btnReplaySwap;
++	irr::gui::IGUIButton* btnReplayPaceDown;
++	irr::gui::IGUIButton* btnReplayPaceReset;
++	irr::gui::IGUIButton* btnReplayPaceUp;
+ 	//surrender/leave
+ 	irr::gui::IGUIButton* btnLeaveGame;
+ 	//restart
+@@ -540,6 +543,8 @@ public:
+ 	void ShowElement(irr::gui::IGUIElement* element, int autoframe = 0);
+ 	void HideElement(irr::gui::IGUIElement* element, bool set_action = false);
+ 	void PopupElement(irr::gui::IGUIElement* element, int hideframe = 0);
++	void RefreshReplayPaceControl();
++	void ChangeReplayPace(int delta_percent);
+ 	void WaitFrameSignal(int frame, std::unique_lock<epro::mutex>& _lck);
+ 	void DrawThumb(const CardDataC* cp, irr::core::vector2di pos, LFList* lflist, bool drag = false, const irr::core::recti* cliprect = nullptr, bool loadimage = true);
+ 	void DrawDeckBd();
+diff --git a/edopro/gframe/game_config.inl b/edopro/gframe/game_config.inl
+index 5ea99b9..8ce9f8f 100644
+--- a/edopro/gframe/game_config.inl
++++ b/edopro/gframe/game_config.inl
+@@ -34,6 +34,7 @@ OPTION(bool, noShuffleDeck, false)
+ OPTION(bool, noCheckDeckContent, false)
+ OPTION(bool, noCheckDeckSize, false)
+ OPTION(bool, hideHandsInReplays, false)
++OPTION(int, replay_pace_percent, 85)
+ OPTION(ygo::GameConfig::TextFont, textfont, EPRO_TEXT("fonts/NotoSansJP-Regular.otf"), 12)
+ OPTION(epro::path_string, numfont, EPRO_TEXT("fonts/NotoSansJP-Regular.otf"))
+ #ifdef YGOPRO_USE_BUNDLED_FONT
+diff --git a/edopro/gframe/menu_handler.h b/edopro/gframe/menu_handler.h
+index aca7f15..5e3f3bf 100644
+--- a/edopro/gframe/menu_handler.h
++++ b/edopro/gframe/menu_handler.h
+@@ -166,6 +166,9 @@ enum GUI {
+ 	BUTTON_REPLAY_UNDO,
+ 	BUTTON_REPLAY_EXIT,
+ 	BUTTON_REPLAY_SWAP,
++	BUTTON_REPLAY_PACE_DOWN,
++	BUTTON_REPLAY_PACE_RESET,
++	BUTTON_REPLAY_PACE_UP,
+ 	EDITBOX_FILE_NAME,
+ 	BUTTON_FILE_SAVE,
+ 	BUTTON_FILE_CANCEL,
+diff --git a/new/edopro/gframe/replay_pace.h b/edopro/gframe/replay_pace.h
+new file mode 100644
+index 0000000..b78aea6
+--- /dev/null
++++ b/edopro/gframe/replay_pace.h
+@@ -0,0 +1,33 @@
++#ifndef REPLAY_PACE_H
++#define REPLAY_PACE_H
++
++#include <cstdint>
++
++namespace ygo::ReplayPace {
++
++constexpr int MIN_PERCENT = 50;
++constexpr int MAX_PERCENT = 150;
++constexpr int STEP_PERCENT = 5;
++constexpr int DEFAULT_PERCENT = 85;
++
++constexpr int ClampPercent(int percent) {
++	return percent < MIN_PERCENT ? MIN_PERCENT : (percent > MAX_PERCENT ? MAX_PERCENT : percent);
++}
++
++constexpr int ScaleMilliseconds(int milliseconds, bool is_replay, bool is_catching_up, int pace_percent) {
++	if(milliseconds <= 0 || !is_replay || is_catching_up)
++		return milliseconds;
++	const int pace = ClampPercent(pace_percent);
++	const int64_t scaled = (static_cast<int64_t>(milliseconds) * 100 + pace / 2) / pace;
++	return scaled < 1 ? 1 : static_cast<int>(scaled);
++}
++
++constexpr int WaitMillisecondsFromFrames(int frames, bool quick_animation, bool is_replay, bool is_catching_up, int pace_percent) {
++	const int effective_frames = (quick_animation && frames >= 12) ? 12 : frames;
++	const int milliseconds = effective_frames * 1000 / 60;
++	return ScaleMilliseconds(milliseconds, is_replay, is_catching_up, pace_percent);
++}
++
++} // namespace ygo::ReplayPace
++
++#endif // REPLAY_PACE_H
